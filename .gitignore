@@ -1,0 +1,69 @@
+# Project specific
+temp/
+transcripts/
+logs/
+*.mp3
+*.wav
+*.webm
+*.docx
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Virtual Environment
+venv/
+env/
+ENV/
+.env
+.venv
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+.project
+.pydevproject
+.settings/
+
+# OS specific
+.DS_Store
+Thumbs.db
+*.db
+desktop.ini
+
+# Streamlit
+.streamlit/
+
+# Logs
+*.log
+*.log.*
+
+# Model files (if you want users to download their own)
+# Uncomment if you don't want to include model files
+# *.pt
+# *.pth
+# *.bin
+
+# Documentation
+docs/_build/
