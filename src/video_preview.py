@@ -1,11 +1,9 @@
+# video_preview.py
 import yt_dlp
 import streamlit as st
-from .utils import format_duration, format_size, ModelConfig
-
+from .utils import format_duration, format_size, ModelConfig, is_playlist_url, extract_playlist_info
 
 class VideoPreview:
-
-
     def __init__(self):
         self.processing_speed = {model['key']: model['speed_factor'] 
                                for model in ModelConfig.MODELS.values()}
@@ -40,8 +38,57 @@ class VideoPreview:
 
     def render_preview(self, url, selected_model):
         try:
-            info = self.get_video_info(url)
-            with st.expander("Video Preview", expanded=True):
+            if is_playlist_url(url):
+                playlist_info = extract_playlist_info(url)
+                
+                # Main container for playlist info
+                st.markdown("### 📝 Playlist Information")
+                st.markdown(f"**Title:** {playlist_info['title']}")
+                
+                # Display metrics in columns
+                m1, m2, m3 = st.columns(3)
+                with m1:
+                    st.metric("Total Videos", playlist_info['video_count'])
+                with m2:
+                    st.metric("Total Duration", format_duration(playlist_info['total_duration']))
+                with m3:
+                    est_time = ModelConfig.estimate_batch_processing_time(
+                        playlist_info['total_duration'],
+                        selected_model
+                    )
+                    st.metric("Est. Processing Time", format_duration(est_time))
+
+                # Show video list in a clean table format
+                st.markdown("### 📋 Videos in Playlist")
+                
+                # Create a DataFrame for better display
+                video_data = []
+                for idx, video in enumerate(playlist_info['videos'], 1):
+                    video_data.append({
+                        "№": idx,
+                        "Title": video['title'],
+                        "Duration": format_duration(video['duration'])
+                    })
+                
+                # Display as a styled table
+                st.table(video_data)
+
+                if playlist_info['total_duration'] > 7200:  # 2 hours
+                    st.warning("""
+                        ⚠️ Long playlist detected! Consider:
+                        - Using a faster model
+                        - Making sure your computer won't sleep
+                        - Being patient 😊
+                    """)
+                
+                return playlist_info
+            else:
+                # Single video preview
+                info = self.get_video_info(url)
+                
+                # Main container for video info
+                st.markdown("### 🎥 Video Information")
+                
                 col1, col2 = st.columns([1, 2])
                 
                 with col1:
@@ -49,7 +96,7 @@ class VideoPreview:
                         st.image(info['thumbnail'])
                 
                 with col2:
-                    st.markdown(f"### {info['title']}")
+                    st.markdown(f"**Title:** {info['title']}")
                     st.markdown(f"**Channel:** {info['channel']}")
                     
                     m1, m2, m3 = st.columns(3)
@@ -61,7 +108,7 @@ class VideoPreview:
                         st.metric("Views", f"{info['view_count']:,}")
 
                 est_time = self.estimate_processing_time(info['duration'], selected_model)
-                st.info(f"Estimated processing time: {format_duration(est_time)}")
+                st.info(f"⏱️ Estimated processing time: {format_duration(est_time)}")
 
                 if info['duration'] > 3600:  # Warning for videos longer than 1 hour
                     st.warning("""
@@ -72,6 +119,7 @@ class VideoPreview:
                     """)
                 
                 return info
+                
         except Exception as e:
             st.error(f"Error loading preview: {str(e)}")
             return None
