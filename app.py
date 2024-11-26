@@ -1,3 +1,5 @@
+import tempfile
+import zipfile
 import streamlit as st
 from src.video_preview import VideoPreview
 from src.transcriber import TranscriptionManager
@@ -30,13 +32,18 @@ st.set_page_config(
 # Apply custom CSS
 st.markdown(CustomCSS.STYLES, unsafe_allow_html=True)
 
-# Initialize session state
-if 'manager' not in st.session_state:
-    st.session_state.manager = TranscriptionManager()
-    st.session_state.preview = VideoPreview()
-    st.session_state.initialization_checked = False
-    st.session_state.model_option = "Base"  # Default model option
-
+def init_session_state():
+    """Initialize session state with default values"""
+    if 'initialized' not in st.session_state:
+        st.session_state.initialized = True
+        st.session_state.manager = TranscriptionManager()
+        st.session_state.preview = VideoPreview()
+        st.session_state.initialization_checked = False
+        
+        # Set Large as default model consistently
+        st.session_state.model_option = "Large"
+        st.session_state.model_info = ModelConfig.MODELS["Large"].copy()
+        st.session_state.model_key = "large"
 
 def check_initialization():
     """Check system compatibility and requirements"""
@@ -59,17 +66,27 @@ def render_sidebar():
     """Render sidebar with model settings and system info"""
     with st.sidebar:
         st.header("Model Settings")
-        # Store model option in session state
-        st.session_state.model_option = st.selectbox(
+
+        # Model selection
+        current_model = st.session_state.model_option
+        available_models = list(ModelConfig.MODELS.keys())
+        current_index = available_models.index(current_model) if current_model in available_models else 0
+
+        selected_model = st.selectbox(
             "Select Model",
-            options=list(ModelConfig.MODELS.keys()),
-            index=list(ModelConfig.MODELS.keys()).index(st.session_state.model_option),
-            help="Choose the model size based on your requirements"
+            options=available_models,
+            index=current_index,
+            key="model_select"
         )
-        # Get model info based on selected option
-        st.session_state.model_info = ModelConfig.MODELS[st.session_state.model_option]
-   
-        # Model information
+
+        # Update session state if model changed
+        if selected_model != st.session_state.model_option:
+            st.session_state.model_option = selected_model
+            st.session_state.model_info = ModelConfig.MODELS[selected_model].copy()
+            st.session_state.model_key = ModelConfig.MODELS[selected_model]["key"]
+            st.rerun()
+
+        # Model information display
         st.markdown("### Model Details")
         info_cols = st.columns(2)
         with info_cols[0]:
@@ -80,8 +97,8 @@ def render_sidebar():
             st.metric("Download", st.session_state.model_info['download_size'])
         
         st.markdown(f"**Description:** {st.session_state.model_info['description']}")
-        
-        # System information
+
+        # Additional system information
         st.markdown("### System Information")
         if torch.cuda.is_available():
             gpu_info = torch.cuda.get_device_properties(0)
@@ -98,7 +115,11 @@ def render_sidebar():
             st.metric("Total Playlists", stats['total_playlists'])
             st.metric("Storage Used", format_size(stats['total_size']))
 
+            
 def main():
+    # Initialize session state
+    init_session_state()
+    
     # Check system compatibility
     check_initialization()
     
@@ -131,6 +152,8 @@ def main():
     
     # Recent transcriptions
     show_recent_transcriptions()
+
+    
 
 def handle_playlist(url):
     """Handle playlist processing"""
@@ -170,7 +193,7 @@ def handle_playlist(url):
                             st.image(video['thumbnail'], width=160)
         
         # Processing controls
-        control_cols = st.columns(3)
+        control_cols = st.columns(4)
         with control_cols[0]:
             process_all = st.button(
                 "🚀 Process All",
@@ -184,12 +207,39 @@ def handle_playlist(url):
                 use_container_width=True
             )
         with control_cols[2]:
+            resume_processing = st.button(
+                "⏯️ Resume",
+                help="Resume from previous progress",
+                use_container_width=True
+            )
+        with control_cols[3]:
             stop_processing = st.button(
                 "⏹️ Stop",
                 help="Stop current processing",
                 use_container_width=True
             )
-        
+
+        # Resume processing logic
+        if resume_processing:
+            resume_col1, resume_col2 = st.columns([3, 1])
+            with resume_col1:
+                resume_dir = st.text_input("Enter playlist directory path to resume from:")
+            with resume_col2:
+                confirm_resume = st.button("✅ Confirm Resume", use_container_width=True)
+                
+            if resume_dir and Path(resume_dir).exists() and confirm_resume:
+                processor = PlaylistProcessor(st.session_state.manager)
+                try:
+                    result = processor.resume_playlist_processing(
+                        Path(resume_dir),
+                        st.session_state.model_key
+                    )
+                    if result:
+                        display_processing_results(result)
+                except Exception as e:
+                    st.error(f"Error resuming processing: {str(e)}")
+
+        # Regular processing logic
         if process_all or process_failed:
             try:
                 # Initialize processor
@@ -199,57 +249,106 @@ def handle_playlist(url):
                     processor.stop_event.set()
                     st.warning("Stopping processing...")
                     st.stop()
-                
+
                 # Process playlist
                 with st.spinner("Processing playlist..."):
                     result = processor.process_playlist(
                         url,
-                        st.session_state.model_info['key'],
-                        retry_only=process_failed  # Use retry_only instead of retry_videos
+                        st.session_state.model_key,
+                        retry_only=process_failed
                     )
                     
                     if result:
-                        st.success(f"""✅ Playlist processing completed!
-                            - Successfully processed: {result['completed']} videos
-                            - Failed: {result['failed']} videos""")
+                        display_processing_results(result)
                         
-                        # Download options
-                        download_cols = st.columns(2)
-                        with download_cols[0]:
-                            if result.get('summary'):  # Check if summary exists
-                                with open(result['summary'], 'rb') as f:
-                                    st.download_button(
-                                        "📄 Download Summary Report",
-                                        f,
-                                        file_name=Path(result['summary']).name,
-                                        mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-                                        use_container_width=True
-                                    )
-                        
-                        with download_cols[1]:
-                            if result.get('output_dir') and Path(result['output_dir']).exists():
-                                import shutil
-                                import tempfile
-                                import zipfile
-                                
-                                # Create zip file of all transcripts
-                                with tempfile.NamedTemporaryFile(delete=False, suffix='.zip') as tmp_zip:
-                                    with zipfile.ZipFile(tmp_zip.name, 'w') as zf:
-                                        for file in Path(result['output_dir']).rglob('*.docx'):
-                                            zf.write(file, file.name)
-                                    
-                                    with open(tmp_zip.name, 'rb') as f:
-                                        st.download_button(
-                                            "📦 Download All Transcripts",
-                                            f,
-                                            file_name=f"transcripts_{datetime.now().strftime('%Y%m%d_%H%M%S')}.zip",
-                                            mime="application/zip",
-                                            use_container_width=True
-                                        )
             except Exception as e:
                 st.error(f"Error processing playlist: {str(e)}")
     except Exception as e:
         st.error(f"Error loading playlist: {str(e)}")
+
+def display_processing_results(result):
+    """Display processing results and download options"""
+    st.success(f"""✅ Playlist processing completed!
+        - Successfully processed: {result['completed']} videos
+        - Failed: {result['failed']} videos""")
+    
+    # Download options
+    download_cols = st.columns(3)
+    
+    # Summary Report
+    with download_cols[0]:
+        if result.get('summary'):
+            with open(result['summary'], 'rb') as f:
+                st.download_button(
+                    "📄 Download Summary Report",
+                    f,
+                    file_name=Path(result['summary']).name,
+                    mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                    use_container_width=True
+                )
+    
+    # Error Log
+    with download_cols[1]:
+        error_log = Path(result['output_dir']) / "logs" / "error_log.txt"
+        if error_log.exists():
+            with open(error_log, 'rb') as f:
+                st.download_button(
+                    "⚠️ Download Error Log",
+                    f,
+                    file_name="error_log.txt",
+                    mime="text/plain",
+                    use_container_width=True
+                )
+    
+    # All Transcripts
+    with download_cols[2]:
+        if result.get('output_dir') and Path(result['output_dir']).exists():
+            try:
+                # Create zip file of all transcripts
+                create_download_zip(Path(result['output_dir']))
+                
+            except Exception as e:
+                st.error(f"Error creating download package: {str(e)}")
+
+def create_download_zip(output_dir: Path):
+    """Create and offer download of transcripts zip file"""
+    try:
+        with tempfile.NamedTemporaryFile(delete=False, suffix='.zip') as tmp_zip:
+            with zipfile.ZipFile(tmp_zip.name, 'w') as zf:
+                # Add transcripts
+                for file in Path(output_dir).rglob('*.docx'):
+                    if not file.name.startswith('00_playlist_summary'):
+                        zf.write(file, f"transcripts/{file.name}")
+                
+                # Add summary
+                summary_file = output_dir / "00_playlist_summary.docx"
+                if summary_file.exists():
+                    zf.write(summary_file, summary_file.name)
+                
+                # Add error log
+                error_log = output_dir / "logs" / "error_log.txt"
+                if error_log.exists():
+                    zf.write(error_log, "logs/error_log.txt")
+
+            # Offer download
+            with open(tmp_zip.name, 'rb') as f:
+                st.download_button(
+                    "📦 Download All Files",
+                    f,
+                    file_name=f"transcripts_{datetime.now().strftime('%Y%m%d_%H%M%S')}.zip",
+                    mime="application/zip",
+                    use_container_width=True
+                )
+                
+    except Exception as e:
+        st.error(f"Error creating download package: {str(e)}")
+    finally:
+        # Cleanup
+        try:
+            if 'tmp_zip' in locals():
+                Path(tmp_zip.name).unlink(missing_ok=True)
+        except Exception:
+            pass
 
 def handle_single_video(url):
     """Handle single video processing"""
@@ -257,7 +356,7 @@ def handle_single_video(url):
         # Show video preview
         video_info = st.session_state.preview.render_preview(
             url,
-            st.session_state.model_info['key']
+             st.session_state.model_key
         )
         
         if video_info:
@@ -279,7 +378,7 @@ def process_single_video(url, video_info):
             try:
                 doc_path = st.session_state.manager.process_video(
                     url,
-                    st.session_state.model_info['key'],
+                    st.session_state.model_key,
                     lambda p, s: (
                         progress_bar.progress(p),
                         status_container.text(s)

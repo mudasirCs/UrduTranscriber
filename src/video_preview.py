@@ -3,34 +3,36 @@ import yt_dlp
 import streamlit as st
 from .utils import format_duration, format_size, ModelConfig, is_playlist_url, extract_playlist_info, VideoUtility
 
+# video_preview.py
+import yt_dlp
+import streamlit as st
+from .utils import format_duration, format_size, ModelConfig, is_playlist_url, extract_playlist_info, VideoUtility
+
 class VideoPreview:
     def __init__(self):
         self.processing_speed = {model['key']: model['speed_factor'] 
                                for model in ModelConfig.MODELS.values()}
 
-    @st.cache_data  # Cache video info
+    @st.cache_data
     def get_video_info(_self, url):
         try:
-            # Clean URL to get just the video URL without playlist parameters
             cleaned_url = VideoUtility.get_clean_video_url(url)
             
             ydl_opts = {
                 'quiet': True,
                 'no_warnings': True,
-                'extract_flat': False,  # Get full info first
-                'format': 'best',  # Request best format for proper duration
+                'extract_flat': False,
+                'format': 'best',
                 'ignoreerrors': True,
                 'no_color': True,
-                'cookies-from-browser': None,  # Don't try to load cookies
-                'extractor_args': {'youtube': {'skip': ['dash', 'hls']}}  # Skip these formats for faster info extraction
+                'cookies-from-browser': None,
+                'extractor_args': {'youtube': {'skip': ['dash', 'hls']}}
             }
             
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                 try:
-                    # First attempt with full info extraction
                     info = ydl.extract_info(cleaned_url, download=False)
                 except Exception:
-                    # If first attempt fails, try with simpler options
                     ydl_opts['extract_flat'] = True
                     ydl_opts['format'] = None
                     with yt_dlp.YoutubeDL(ydl_opts) as ydl2:
@@ -39,10 +41,9 @@ class VideoPreview:
                 if not info:
                     raise Exception("Could not extract video information")
                 
-                # Extract information with fallbacks
                 return {
                     'title': info.get('title', 'Unknown'),
-                    'duration': info.get('duration') or 0,  # Handle None case
+                    'duration': info.get('duration') or 0,
                     'channel': info.get('channel', info.get('uploader', 'Unknown')),
                     'view_count': info.get('view_count', 0),
                     'upload_date': info.get('upload_date', 'Unknown'),
@@ -50,7 +51,7 @@ class VideoPreview:
                     'thumbnail': info.get('thumbnail', info.get('thumbnails', [{'url': None}])[0].get('url')),
                     'is_short': VideoUtility.is_shorts_url(url),
                     'video_id': info.get('id', VideoUtility.get_video_id(url)),
-                    'original_url': url  # Keep original URL for reference
+                    'original_url': url
                 }
                 
         except Exception as e:
@@ -66,38 +67,36 @@ class VideoPreview:
             else:
                 raise Exception(f"Error fetching video info: {error_msg}")
 
-    def estimate_processing_time(self, duration, model_name):
-        """Estimate processing time in seconds"""
-        base_time = duration * self.processing_speed.get(model_name, 1)
-        overhead = 30  # Additional time for download and document generation
-        
-        # Add extra overhead for shorts (they often need additional processing)
-        if duration < 60:  # Typical shorts duration
+    def estimate_processing_time(self, duration, model_key):
+        base_time = duration * self.processing_speed.get(model_key, 1)
+        overhead = 30
+        if duration < 60:
             overhead += 15
-            
         return base_time + overhead
 
-    def render_preview(self, url, selected_model):
+    def render_preview(self, url, model_key):
         try:
             if is_playlist_url(url):
-                return self.render_playlist_preview(url, selected_model)
+                return self.render_playlist_preview(url, model_key)
             else:
-                return self.render_video_preview(url, selected_model)
-                
+                return self.render_video_preview(url, model_key)
         except Exception as e:
             st.error(f"Error loading preview: {str(e)}")
             return None
 
-    def render_playlist_preview(self, url, selected_model):
-        """Render playlist preview"""
+    def render_playlist_preview(self, url, model_key):
         try:
             playlist_info = extract_playlist_info(url)
             
-            # Main container for playlist info
+            model_display_name = next(
+                (name for name, config in ModelConfig.MODELS.items() 
+                 if config['key'] == model_key),
+                model_key.title()
+            )
+            
             st.markdown("### 📝 Playlist Information")
             st.markdown(f"**Title:** {playlist_info['title']}")
             
-            # Display metrics in columns
             m1, m2, m3 = st.columns(3)
             with m1:
                 st.metric("Total Videos", playlist_info['video_count'])
@@ -106,17 +105,13 @@ class VideoPreview:
             with m3:
                 est_time = ModelConfig.estimate_batch_processing_time(
                     playlist_info['total_duration'],
-                    selected_model
+                    model_key
                 )
                 st.metric("Est. Processing Time", format_duration(est_time))
 
-            # Show video list in a clean table format
             st.markdown("### 📋 Videos in Playlist")
-            
-            # Create a DataFrame for better display
             video_data = []
             for idx, video in enumerate(playlist_info['videos'], 1):
-                # Handle potential missing durations
                 duration = video.get('duration', 0)
                 if duration is None:
                     duration = 0
@@ -127,10 +122,9 @@ class VideoPreview:
                     "Duration": format_duration(duration)
                 })
             
-            # Display as a styled table
             st.table(video_data)
 
-            if playlist_info['total_duration'] > 7200:  # 2 hours
+            if playlist_info['total_duration'] > 7200:
                 st.warning("""
                     ⚠️ Long playlist detected! Consider:
                     - Using a faster model
@@ -144,12 +138,10 @@ class VideoPreview:
             st.error(f"Error loading playlist: {str(e)}")
             return None
 
-    def render_video_preview(self, url, selected_model):
-        """Render single video preview"""
+    def render_video_preview(self, url, model_key):
         try:
             info = self.get_video_info(url)
             
-            # Main container for video info
             st.markdown("### 🎥 Video Information")
             
             col1, col2 = st.columns([1, 2])
@@ -162,7 +154,6 @@ class VideoPreview:
                 st.markdown(f"**Title:** {info['title']}")
                 st.markdown(f"**Channel:** {info['channel']}")
                 
-                # Add shorts indicator if it's a shorts video
                 if info.get('is_short'):
                     st.markdown("**Type:** 📱 YouTube Shorts")
                 
@@ -174,17 +165,12 @@ class VideoPreview:
                 with m3:
                     st.metric("Views", f"{info['view_count']:,}")
 
-            est_time = self.estimate_processing_time(info['duration'], selected_model)
+            est_time = self.estimate_processing_time(info['duration'], model_key)
             st.info(f"⏱️ Estimated processing time: {format_duration(est_time)}")
 
-            # Warnings based on video type and duration
             if info.get('is_short'):
-                st.info("""
-                    ℹ️ YouTube Shorts detected:
-                    - Processing might take a bit longer
-                    - Quality may vary due to video format
-                """)
-            elif info['duration'] > 3600:  # Warning for videos longer than 1 hour
+                st.info("ℹ️ YouTube Shorts detected - Processing might take a bit longer")
+            elif info['duration'] > 3600:
                 st.warning("""
                     ⚠️ Long video detected! Consider:
                     - Using a faster model

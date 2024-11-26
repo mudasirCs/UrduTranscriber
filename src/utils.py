@@ -74,62 +74,62 @@ def extract_playlist_info(url: str) -> Dict[str, Any]:
     try:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(url, download=False)
+            if not info:
+                raise ValueError("Could not extract playlist information")
+            
             if 'entries' not in info:
                 raise ValueError("No playlist entries found")
                 
             videos = []
             total_duration = 0
             
-            for entry in info['entries']:
-                if entry:  # Some entries might be None due to private/deleted videos
-                    video_info = {
-                        'url': f"https://youtube.com/watch?v={entry['id']}",
-                        'title': entry.get('title', 'Unknown'),
-                        'duration': entry.get('duration', 0),
-                        'channel': entry.get('channel', 'Unknown'),
-                        'thumbnail': entry.get('thumbnail', None)
-                    }
-                    videos.append(video_info)
-                    total_duration += video_info['duration']
+            entries = info.get('entries', [])
+            if not entries:
+                raise ValueError("No videos found in playlist")
+
+            for entry in entries:
+                if entry and isinstance(entry, dict):  # Verify entry is valid
+                    try:
+                        video_info = {
+                            'url': f"https://youtube.com/watch?v={entry['id']}",
+                            'title': entry.get('title', 'Unknown'),
+                            'duration': entry.get('duration', 0),
+                            'channel': entry.get('channel', entry.get('uploader', 'Unknown')),
+                            'thumbnail': entry.get('thumbnail'),
+                            'view_count': entry.get('view_count', 0),
+                            'upload_date': entry.get('upload_date', 'Unknown')
+                        }
+                        videos.append(video_info)
+                        total_duration += video_info['duration'] or 0
+                    except Exception:
+                        continue  # Skip invalid entries
+            
+            if not videos:
+                raise ValueError("No valid videos found in playlist")
             
             return {
                 'title': info.get('title', 'Unknown Playlist'),
-                'channel': info.get('channel', 'Unknown Channel'),
+                'channel': info.get('channel', info.get('uploader', 'Unknown Channel')),
                 'videos': videos,
                 'total_duration': total_duration,
                 'video_count': len(videos),
-                'playlist_id': info.get('id', None)
+                'playlist_id': info.get('id')
             }
             
     except Exception as e:
         raise Exception(f"Error extracting playlist info: {str(e)}")
+    
 
 class ModelConfig:
     """Configuration for different Whisper models"""
     MODELS = {
-        "Tiny (fastest)": {
-            "key": "tiny",
-            "size": "39M parameters",
-            "description": "Fastest but least accurate",
-            "download_size": "~75 MB",
-            "speed_factor": 0.5,
-            "memory_requirement": "1GB VRAM"
-        },
-        "Base": {
-            "key": "base",
-            "size": "74M parameters",
-            "description": "Good balance of speed and accuracy",
-            "download_size": "~142 MB",
-            "speed_factor": 1.0,
-            "memory_requirement": "2GB VRAM"
-        },
-        "Small": {
-            "key": "small",
-            "size": "244M parameters",
-            "description": "Better accuracy, still reasonable speed",
-            "download_size": "~466 MB",
-            "speed_factor": 2.0,
-            "memory_requirement": "3GB VRAM"
+        "Large": {
+            "key": "large",
+            "size": "1550M parameters",
+            "description": "Best accuracy, slowest processing",
+            "download_size": "~3 GB",
+            "speed_factor": 4.0,
+            "memory_requirement": "6GB VRAM"
         },
         "Medium": {
             "key": "medium",
@@ -139,16 +139,32 @@ class ModelConfig:
             "speed_factor": 3.0,
             "memory_requirement": "4GB VRAM"
         },
-        "Large": {
-            "key": "large",
-            "size": "1550M parameters",
-            "description": "Best accuracy, slowest processing",
-            "download_size": "~3 GB",
-            "speed_factor": 4.0,
-            "memory_requirement": "6GB VRAM"
+        "Small": {
+            "key": "small",
+            "size": "244M parameters",
+            "description": "Better accuracy, still reasonable speed",
+            "download_size": "~466 MB",
+            "speed_factor": 2.0,
+            "memory_requirement": "3GB VRAM"
+        },
+        "Base": {
+            "key": "base",
+            "size": "74M parameters",
+            "description": "Good balance of speed and accuracy",
+            "download_size": "~142 MB",
+            "speed_factor": 1.0,
+            "memory_requirement": "2GB VRAM"
+        },
+        "Tiny": {
+            "key": "tiny",
+            "size": "39M parameters",
+            "description": "Fastest but least accurate",
+            "download_size": "~75 MB",
+            "speed_factor": 0.5,
+            "memory_requirement": "1GB VRAM"
         }
     }
-    
+
     @staticmethod
     def estimate_batch_processing_time(total_duration: int, model_name: str) -> int:
         """Estimate total processing time for multiple videos"""
@@ -294,3 +310,33 @@ def check_system_compatibility() -> tuple[bool, List[str]]:
         issues.append("Could not check disk space")
     
     return compatible, issues
+
+class ErrorConfig:
+    """Configuration for error handling and retries"""
+    RETRY_DELAYS = {
+        'download': [5, 10, 20, 30, 60],  # Progressive delays for downloads
+        'transcribe': [10, 20, 30, 60, 120],  # Longer delays for transcription
+        'rate_limit': [60, 120, 240, 480, 960]  # Very long delays for rate limits
+    }
+    
+    MAX_RETRIES = {
+        'download': 5,
+        'transcribe': 3,
+        'rate_limit': 5
+    }
+    
+    ERROR_CATEGORIES = {
+        'network': ['HTTP Error', 'ConnectionError', 'Timeout'],
+        'availability': ['Video unavailable', 'Sign in', 'copyright'],
+        'resources': ['cuda', 'out of memory', 'GPU memory'],
+        'rate_limit': ['429', 'Too Many Requests'],
+        'processing': ['ffmpeg', 'audio processing', 'transcription failed']
+    }
+
+class ProcessingConfig:
+    """Configuration for processing parameters"""
+    BATCH_SIZE = 3  # Number of simultaneous downloads
+    MEMORY_THRESHOLD = 0.8  # GPU memory threshold for cleanup
+    PROGRESS_SAVE_INTERVAL = 60  # Save progress every 60 seconds
+    CLEANUP_THRESHOLD = 10  # Clean up after every 10 videos
+    MAX_TRANSCRIPT_SIZE = 10 * 1024 * 1024  # 10MB max transcript size

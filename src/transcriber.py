@@ -18,7 +18,7 @@ from urllib.error import HTTPError
 import threading
 from queue import Queue
 import time
-from .utils import VideoUtility, extract_playlist_info, format_duration, sanitize_filename, get_timestamp
+from .utils import ModelConfig, VideoUtility, extract_playlist_info, format_duration, sanitize_filename, get_timestamp
 
 class TranscriptionManager:
     def __init__(self):
@@ -297,6 +297,7 @@ class TranscriptionManager:
         try:
             if progress_callback:
                 progress_callback(0.1, "Loading model...")
+
             model = TranscriptionManager.load_model(model_name)
             
             if progress_callback:
@@ -310,6 +311,16 @@ class TranscriptionManager:
             if torch.cuda.is_available():
                 torch.cuda.empty_cache()
             
+            model_info = None
+            for display_name, config in ModelConfig.MODELS.items():
+                if config['key'] == model_name:
+                    model_info = {
+                        'name': display_name,
+                        'parameters': config['size'],
+                        'key': model_name
+                    }
+                    break
+
             result = model.transcribe(
                 audio_info['path'],
                 language="ur",
@@ -317,6 +328,9 @@ class TranscriptionManager:
                 fp16=False
             )
             
+            if model_info:
+                audio_info['model'] = model_info
+
             if progress_callback:
                 progress_callback(0.8, "Generating document...")
             return self.save_transcript(result, audio_info, url)
@@ -329,13 +343,15 @@ class TranscriptionManager:
                     pass
 
     def process_single_video(self, audio_path: str, video_url: str, video_title: str, 
-                            progress_callback=None, metadata: Optional[Dict[str, Any]] = None):
+                            progress_callback=None, metadata: Optional[Dict[str, Any]] = None,
+                            model_name: str = "base"):  # Added model_name parameter
         """Process a single video from existing audio file"""
         try:
             # Load model
             if progress_callback:
-                progress_callback(0.1, "Loading model...")
-            model = self.load_model("base")
+                progress_callback(0.1, f"Loading {model_name} model...")
+
+            model = self.load_model(model_name)
             
             # Clear GPU memory
             if torch.cuda.is_available():
@@ -362,7 +378,49 @@ class TranscriptionManager:
                 'duration': 0,
                 'channel': 'Unknown'
             }
+
+            for display_name, config in ModelConfig.MODELS.items():
+                if config['key'] == model_name:
+                    info['model'] = {
+                        'name': display_name,  # Use the display name (e.g., "Large (1550M parameters)")
+                        'parameters': config['size'],  # Get the parameters info
+                        'key': model_name     # Keep the key (e.g., "large")
+                    }
+                    break
+            else:
+                # Fallback if model not found in config
+                info['model'] = {
+                    'name': model_name.title(),
+                    'parameters': 'Unknown size',
+                    'key': model_name
+                }
             
+            model_display_name = None
+            model_params = None
+            for display_name, config in ModelConfig.MODELS.items():
+                if config['key'] == model_name:
+                    model_display_name = display_name
+                    model_params = config['size']
+                    break
+
+            if not model_display_name:
+                # Fallback for model names
+                model_map = {
+                    'tiny': 'Tiny (fastest)',
+                    'base': 'Base',
+                    'small': 'Small',
+                    'medium': 'Medium',
+                    'large': 'Large'
+                }
+                model_display_name = model_map.get(model_name, model_name.title())
+                model_params = ModelConfig.MODELS.get(model_display_name, {}).get('size', '')
+            
+            info['model'] = {
+                'name': model_name,
+                'display_name': model_display_name,
+                'parameters': model_params
+            }
+
             # Save transcript
             if progress_callback:
                 progress_callback(0.9, "Saving transcript...")
@@ -378,9 +436,10 @@ class TranscriptionManager:
             if progress_callback:
                 progress_callback(0, f"Error: {str(e)}")
             raise Exception(f"Failed to process video: {str(e)}")
+
     
     def save_transcript(self, result: Dict[str, Any], info: Dict[str, Any], url: str, 
-                       output_path: Optional[str] = None):
+                    output_path: Optional[str] = None):
         """Save transcript to Word document with optional output path"""
         try:
             doc = Document()
@@ -395,13 +454,38 @@ class TranscriptionManager:
             self.add_hyperlink(p, url, url)
             
             # Info table
-            info_table = doc.add_table(rows=2, cols=2)
+            info_table = doc.add_table(rows=4, cols=2)
             info_table.style = 'Table Grid'
-            info_table.rows[0].cells[0].text = 'Channel'
-            info_table.rows[0].cells[1].text = info['channel']
-            info_table.rows[1].cells[0].text = 'Duration'
-            info_table.rows[1].cells[1].text = format_duration(info.get('duration', 0))
             
+            # Format model info
+            model_info = info.get('model', {})
+            if model_info:
+                model_text = f"{model_info['name']}"
+                if model_info.get('parameters'):
+                    model_text += f" ({model_info['parameters']})"
+            else:
+                model_text = "Unknown Model"
+            
+            # Add information to table
+            rows = info_table.rows
+            
+            # Model information
+            rows[0].cells[0].text = 'Model Used'
+            rows[0].cells[1].text = model_text
+            
+            # Channel information
+            rows[1].cells[0].text = 'Channel'
+            rows[1].cells[1].text = info.get('channel', 'Unknown')
+            
+            # Duration information
+            rows[2].cells[0].text = 'Duration'
+            rows[2].cells[1].text = format_duration(info.get('duration', 0))
+            
+            # Processing date
+            rows[3].cells[0].text = 'Processing Date'
+            rows[3].cells[1].text = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            
+            # Rest of the transcript generation...
             # Complete transcript
             doc.add_heading('Complete Transcript', level=1)
             p = doc.add_paragraph()
@@ -446,15 +530,13 @@ class TranscriptionManager:
                 safe_title = sanitize_filename(info['title'])
                 doc_path = self.dirs['output'] / f"{timestamp}_{safe_title}.docx"
             
-            # Ensure output directory exists
             doc_path.parent.mkdir(parents=True, exist_ok=True)
-            
-            # Save the document
             doc.save(str(doc_path))
             return str(doc_path)
             
         except Exception as e:
             raise Exception(f"Failed to save transcript: {str(e)}")
+        
 
     def list_recent_transcripts(self, limit=5):
         """Get list of recent transcriptions with recursive search"""
