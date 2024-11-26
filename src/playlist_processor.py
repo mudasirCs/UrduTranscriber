@@ -9,6 +9,7 @@ from typing import Dict, Optional, List
 from datetime import datetime
 from docx import Document
 from docx.enum.text import WD_ALIGN_PARAGRAPH
+import yt_dlp
 from .utils import extract_playlist_info, format_duration, get_timestamp
 import re
 import torch
@@ -27,10 +28,18 @@ class VideoTask:
     audio_path: Optional[str] = None
     last_attempt: Optional[str] = None
     attempt_count: int = 0
-    download_progress: float = 0.0
+    download_size: int = 0
+    downloaded_size: int = 0
     download_speed: float = 0
     processing_progress: float = 0
+    stop_requested: bool = False
+    channel: str = 'Unknown'  # Added default value
+    video_id: Optional[str] = None
+    thumbnail: Optional[str] = None
+    view_count: int = 0
+    upload_date: str = 'Unknown'
 
+    
 class PlaylistProcessor:
     def __init__(self, transcription_manager=None):
         """Initialize PlaylistProcessor with optional transcription manager"""
@@ -80,7 +89,7 @@ class PlaylistProcessor:
         return text
 
     def process_playlist(self, playlist_url: str, model_name: str = "base", retry_videos: List[str] = None, retry_only: bool = False):
-        """Process playlist with concurrent processing"""
+        """Process playlist processing"""
         try:
             if not self.manager:
                 raise Exception("Transcription manager not set")
@@ -97,11 +106,18 @@ class PlaylistProcessor:
                 self.tasks.clear()
                 for idx, video in enumerate(playlist_info['videos'], 1):
                     video_id = video['url'].split('v=')[-1].split('&')[0]
+
+                    # Create task with all available information
                     self.tasks[video_id] = VideoTask(
                         idx=idx,
                         url=video['url'],
-                        title=self.sanitize_text(video['title']),
-                        duration=video.get('duration', 0)
+                        title=video.get('title', 'Unknown'),
+                        duration=video.get('duration', 0),
+                        channel=video.get('channel', 'Unknown'),  # Set channel explicitly
+                        video_id=video_id,
+                        thumbnail=video.get('thumbnail'),
+                        view_count=video.get('view_count', 0),
+                        upload_date=video.get('upload_date', 'Unknown')
                     )
             else:
                 # Handle retry logic
@@ -227,7 +243,7 @@ class PlaylistProcessor:
             raise
 
     def process_single_video(self, video_id: str, task: VideoTask, model_name: str):
-        """Process a single video"""
+        """Process a single video with proper metadata handling"""
         max_retries = 5
         retry_delay = 10
         
@@ -239,6 +255,29 @@ class PlaylistProcessor:
                 # Download and process
                 audio_info = None
                 try:
+                    # Get detailed video info before downloading
+                    ydl_opts = {
+                        'quiet': True,
+                        'no_warnings': True,
+                        'extract_flat': False,  # Get full info
+                        'format': 'best',
+                        'ignoreerrors': True,
+                        'no_color': True
+                    }
+                    
+                    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                        video_info = ydl.extract_info(task.url, download=False)
+                        
+                        # Update task with accurate information
+                        if video_info:
+                            task.title = video_info.get('title', task.title)
+                            task.duration = video_info.get('duration', task.duration)
+                            task.channel = video_info.get('channel', video_info.get('uploader', 'Unknown'))
+                            task.view_count = video_info.get('view_count', task.view_count)
+                            task.upload_date = video_info.get('upload_date', task.upload_date)
+                            task.thumbnail = video_info.get('thumbnail', task.thumbnail)
+
+                    
                     # Download audio
                     st.info(f"Downloading: {task.title} (Attempt {attempt + 1}/{max_retries})")
                     audio_info = self.manager.download_audio(
@@ -263,11 +302,19 @@ class PlaylistProcessor:
                             task.processing_progress = float(progress)
                         st.text(status)
                     
+                    # Pass full video information to process_single_video
                     doc_path = self.manager.process_single_video(
                         audio_info['path'],
                         task.url,
                         task.title,
-                        progress_callback
+                        progress_callback,
+                        metadata={
+                            'duration': task.duration,
+                            'channel': task.channel,
+                            'title': task.title,
+                            'view_count': task.view_count,
+                            'upload_date': task.upload_date
+                        }
                     )
                     
                     if doc_path:
@@ -313,6 +360,7 @@ class PlaylistProcessor:
 
         st.error(f"Failed to process {task.title}: Max retries exceeded")
         return {'success': False, 'error': 'Max retries exceeded'}
+
 
     def display_status_table(self, container):
         """Display status table with action buttons"""

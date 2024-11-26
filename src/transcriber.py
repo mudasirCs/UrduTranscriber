@@ -18,7 +18,7 @@ from urllib.error import HTTPError
 import threading
 from queue import Queue
 import time
-from .utils import extract_playlist_info, format_duration, sanitize_filename, get_timestamp
+from .utils import VideoUtility, extract_playlist_info, format_duration, sanitize_filename, get_timestamp
 
 class TranscriptionManager:
     def __init__(self):
@@ -112,11 +112,13 @@ class TranscriptionManager:
             return False
 
     def download_audio(self, video_url: str, max_retries: int = 3, retry_delay: int = 5, 
-                      output_path: Optional[str] = None) -> Dict[str, Any]:
+                    output_path: Optional[str] = None) -> Dict[str, Any]:
         """Download audio from YouTube video with retries and progress tracking"""
         self.download_progress = 0.0
         self.current_status = "Starting download..."
         
+        download_url = VideoUtility.get_clean_video_url(video_url)
+
         for attempt in range(max_retries):
             try:
                 # Configure output path
@@ -129,8 +131,40 @@ class TranscriptionManager:
                 
                 # Ensure directory exists
                 output_dir.mkdir(parents=True, exist_ok=True)
+
+                # First try to get video info separately
+                info_opts = {
+                    'quiet': True,
+                    'no_warnings': True,
+                    'extract_flat': False,
+                    'format': 'bestaudio/best',
+                    'ignoreerrors': True,
+                    'no_color': True
+                }
+
+                with yt_dlp.YoutubeDL(info_opts) as ydl_info:
+                    try:
+                        # Get video info first
+                        video_info = ydl_info.extract_info(download_url, download=False)
+                        if not video_info:
+                            raise Exception("Could not fetch video information")
+                            
+                        # Check if video is available and has duration
+                        if video_info.get('duration') is None:
+                            # Try an alternative format if duration is not available
+                            info_opts['format'] = 'bestaudio'
+                            with yt_dlp.YoutubeDL(info_opts) as ydl_info2:
+                                video_info = ydl_info2.extract_info(download_url, download=False)
+                                if not video_info or video_info.get('duration') is None:
+                                    raise Exception("Could not determine video duration")
+                    except Exception as e:
+                        if "Private video" in str(e):
+                            raise Exception("This is a private video")
+                        elif "Sign in" in str(e):
+                            raise Exception("This video requires age verification or sign-in")
+                        raise
                 
-                # Configure yt-dlp options
+                # Configure yt-dlp options for download
                 ydl_opts = {
                     'format': 'bestaudio/best',
                     'outtmpl': output_template,
@@ -146,11 +180,12 @@ class TranscriptionManager:
                     'retries': 10,
                     'fragment_retries': 10,
                     'skip_unavailable_fragments': False,
-                    'socket_timeout': 60,
+                    'socket_timeout': 30,
                     # Rate limiting
                     'sleep_interval': 1,
                     'max_sleep_interval': 5,
                     'sleep_interval_requests': 1,
+                    'extractor_args': {'youtube': {'skip': ['dash', 'hls']}},
                     # Additional options
                     'ignoreerrors': False,
                     'no_color': True,
@@ -170,19 +205,12 @@ class TranscriptionManager:
                 
                 # Download the audio
                 with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                    # First try to extract info without downloading
-                    info = ydl.extract_info(video_url, download=False)
+                    info = ydl.extract_info(download_url, download=True)
                     video_id = info['id']
                     
                     # Check if video is available
                     if info.get('is_live', False):
                         raise Exception("Cannot download live streams")
-                    
-                    if not info.get('duration'):
-                        raise Exception("Video duration not available")
-                    
-                    # Now proceed with download
-                    info = ydl.extract_info(video_url, download=True)
                     
                     # Look for the MP3 file
                     mp3_file = None
@@ -210,11 +238,11 @@ class TranscriptionManager:
                     # Return comprehensive info
                     return {
                         'path': str(mp3_file),
-                        'video_id': video_id,
-                        'title': info.get('title', 'Unknown Title'),
-                        'duration': info.get('duration', 0),
-                        'channel': info.get('channel', 'Unknown Channel'),
-                        'upload_date': info.get('upload_date', 'Unknown Date'),
+                        'video_id': info['id'],
+                        'title': info.get('title', video_info.get('title', 'Unknown Title')),
+                        'duration': info.get('duration', video_info.get('duration', 0)),
+                        'channel': info.get('channel', video_info.get('channel', 'Unknown Channel')),
+                        'upload_date': info.get('upload_date', video_info.get('upload_date', 'Unknown Date')),
                         'filesize': mp3_file.stat().st_size,
                         'format': 'mp3',
                         'bitrate': '192k',
@@ -239,6 +267,8 @@ class TranscriptionManager:
                     raise Exception("Video not accessible due to copyright restrictions")
                 elif "Sign in" in error_msg:
                     raise Exception("Video requires authentication")
+                elif "This live event has ended" in error_msg:
+                    raise Exception("This live stream has ended")
                 
                 if attempt < max_retries - 1:
                     wait_time = retry_delay * (attempt + 1)
@@ -299,7 +329,7 @@ class TranscriptionManager:
                     pass
 
     def process_single_video(self, audio_path: str, video_url: str, video_title: str, 
-                            progress_callback=None):
+                            progress_callback=None, metadata: Optional[Dict[str, Any]] = None):
         """Process a single video from existing audio file"""
         try:
             # Load model
@@ -324,12 +354,12 @@ class TranscriptionManager:
             
             if progress_callback:
                 progress_callback(0.8, "Generating document...")
-                
-            # Create info dict
-            info = {
+            
+            # Use metadata if provided, otherwise create default info dict
+            info = metadata or {
                 'title': video_title,
                 'path': audio_path,
-                'duration': 0,  # Duration not available
+                'duration': 0,
                 'channel': 'Unknown'
             }
             

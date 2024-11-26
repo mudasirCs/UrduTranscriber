@@ -53,13 +53,10 @@ def is_playlist_url(url: str) -> bool:
     """Check if URL is a playlist"""
     playlist_indicators = [
         'playlist?list=',
-        '&list=',
         '/playlist/'
     ]
-    # Check if it's a playlist URL but not a video in a playlist
-    is_playlist = any(indicator in url for indicator in playlist_indicators)
-    is_video = 'watch?v=' in url or 'youtu.be/' in url
-    return is_playlist and not (is_video and '&list=' in url)
+    # Only consider it a playlist if it's a pure playlist URL
+    return any(indicator in url for indicator in playlist_indicators)
 
 def extract_playlist_info(url: str) -> Dict[str, Any]:
     """Extract playlist information using yt-dlp"""
@@ -165,7 +162,6 @@ class ModelConfig:
         }.get(model_name, 1.0)
         
         # Calculate processing time
-        # Most models process audio roughly at 1x to 4x real-time
         processing_time = total_duration * base_factor
         
         # Add overhead for each minute of audio
@@ -192,10 +188,16 @@ class VideoUtility:
     @staticmethod
     def get_video_id(url: str) -> Optional[str]:
         """Extract video ID from various YouTube URL formats"""
+        if 'watch?v=' in url and '&list=' in url:
+            # Extract the video ID between 'v=' and '&'
+            vid_part = url.split('watch?v=')[1]
+            return vid_part.split('&')[0]
+            
         patterns = [
-            r'(?:v=|\/)([0-9A-Za-z_-]{11}).*',
-            r'(?:youtu\.be\/)([0-9A-Za-z_-]{11})',
-            r'(?:embed\/)([0-9A-Za-z_-]{11})'
+            r'(?:v=|\/)([0-9A-Za-z_-]{11})',  # Regular video
+            r'(?:youtu\.be\/)([0-9A-Za-z_-]{11})',  # Shortened
+            r'(?:embed\/)([0-9A-Za-z_-]{11})',  # Embedded
+            r'(?:shorts\/)([0-9A-Za-z_-]{11})'  # Shorts
         ]
         
         for pattern in patterns:
@@ -205,23 +207,26 @@ class VideoUtility:
         return None
     
     @staticmethod
+    def get_clean_video_url(url: str) -> str:
+        """Convert any YouTube URL to a simple video URL"""
+        video_id = VideoUtility.get_video_id(url)
+        if video_id:
+            return f"https://www.youtube.com/watch?v={video_id}"
+        return url
+    
+    @staticmethod
     def validate_url(url: str) -> bool:
         """Validate YouTube URL"""
         patterns = [
-            r'^https?:\/\/(www\.)?youtube\.com\/(watch\?v=|playlist\?list=|embed\/)',
+            r'^https?:\/\/(www\.)?youtube\.com\/(watch\?v=|playlist\?list=|embed\/|shorts\/)',
             r'^https?:\/\/youtu\.be\/'
         ]
         return any(re.match(pattern, url) for pattern in patterns)
     
     @staticmethod
-    def is_video_available(url: str) -> bool:
-        """Check if video is available"""
-        try:
-            with yt_dlp.YoutubeDL({'quiet': True}) as ydl:
-                ydl.extract_info(url, download=False)
-                return True
-        except:
-            return False
+    def is_shorts_url(url: str) -> bool:
+        """Check if URL is a YouTube Shorts video"""
+        return '/shorts/' in url
 
 class FileManager:
     """Utility class for file management"""

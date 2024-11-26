@@ -4,7 +4,8 @@ from src.transcriber import TranscriptionManager
 from src.playlist_processor import PlaylistProcessor
 from src.styles import CustomCSS
 from src.utils import (
-    ModelConfig, 
+    ModelConfig,
+    format_size, 
     is_playlist_url, 
     extract_playlist_info, 
     format_duration,
@@ -95,7 +96,7 @@ def render_sidebar():
             st.markdown("### Usage Statistics")
             st.metric("Total Transcripts", stats['total_transcripts'])
             st.metric("Total Playlists", stats['total_playlists'])
-            st.metric("Storage Used", format_duration(stats['total_size']))
+            st.metric("Storage Used", format_size(stats['total_size']))
 
 def main():
     # Check system compatibility
