@@ -2,9 +2,12 @@ from datetime import datetime
 import os
 import re
 from pathlib import Path
+import ffmpeg
 import yt_dlp
 from typing import Dict, List, Any, Optional
 import streamlit as st
+import torch
+import shutil
 
 def format_duration(seconds: float) -> str:
     """Convert seconds to human-readable duration"""
@@ -118,7 +121,6 @@ def extract_playlist_info(url: str) -> Dict[str, Any]:
             
     except Exception as e:
         raise Exception(f"Error extracting playlist info: {str(e)}")
-    
 
 class ModelConfig:
     """Configuration for different Whisper models"""
@@ -168,7 +170,6 @@ class ModelConfig:
     @staticmethod
     def estimate_batch_processing_time(total_duration: int, model_name: str) -> int:
         """Estimate total processing time for multiple videos"""
-        # Base processing factors for each model
         base_factor = {
             'tiny': 0.5,
             'base': 1.0,
@@ -177,11 +178,8 @@ class ModelConfig:
             'large': 4.0
         }.get(model_name, 1.0)
         
-        # Calculate processing time
         processing_time = total_duration * base_factor
-        
-        # Add overhead for each minute of audio
-        overhead_per_minute = 2  # seconds of overhead per minute of audio
+        overhead_per_minute = 2
         total_overhead = (total_duration / 60) * overhead_per_minute
         
         return int(processing_time + total_overhead)
@@ -205,7 +203,6 @@ class VideoUtility:
     def get_video_id(url: str) -> Optional[str]:
         """Extract video ID from various YouTube URL formats"""
         if 'watch?v=' in url and '&list=' in url:
-            # Extract the video ID between 'v=' and '&'
             vid_part = url.split('watch?v=')[1]
             return vid_part.split('&')[0]
             
@@ -273,11 +270,77 @@ class FileManager:
                 total += entry.stat().st_size
         return total
 
+class AudioUtility:
+    """Audio file handling utilities"""
+    
+    # Supported audio formats and their max sizes in MB
+    SUPPORTED_FORMATS = {
+        '.mp3': {'max_size': 500, 'mime': 'audio/mpeg'},
+        '.wav': {'max_size': 1000, 'mime': 'audio/wav'},
+        '.m4a': {'max_size': 500, 'mime': 'audio/mp4'},
+        '.ogg': {'max_size': 500, 'mime': 'audio/ogg'},
+        '.flac': {'max_size': 1000, 'mime': 'audio/flac'},
+        '.aac': {'max_size': 500, 'mime': 'audio/aac'},
+        '.wma': {'max_size': 500, 'mime': 'audio/x-ms-wma'}
+    }
+
+    @staticmethod
+    def get_audio_duration(file_path: str) -> float:
+        """Get audio file duration using ffmpeg"""
+        try:
+            probe = ffmpeg.probe(file_path)
+            duration = float(probe['format']['duration'])
+            return duration
+        except Exception:
+            return 0
+
+    @staticmethod
+    def convert_to_mp3(input_path: str, output_path: str) -> bool:
+        """Convert audio file to MP3 format"""
+        try:
+            stream = ffmpeg.input(input_path)
+            stream = ffmpeg.output(stream, output_path, acodec='libmp3lame', q=2)
+            ffmpeg.run(stream, capture_stdout=True, capture_stderr=True)
+            return True
+        except Exception:
+            return False
+
+    @classmethod
+    def validate_audio_file(cls, file_info: dict) -> dict:
+        """
+        Validate audio file
+        Returns: dict with 'valid' boolean and 'message' string
+        """
+        extension = file_info['extension'].lower()
+        
+        # Check format
+        if extension not in cls.SUPPORTED_FORMATS:
+            return {
+                'valid': False,
+                'message': f"Unsupported format. Supported formats: {', '.join(cls.SUPPORTED_FORMATS.keys())}"
+            }
+        
+        # Check size
+        max_size = cls.SUPPORTED_FORMATS[extension]['max_size'] * 1024 * 1024  # Convert to bytes
+        if file_info['size'] > max_size:
+            return {
+                'valid': False,
+                'message': f"File too large. Maximum size for {extension} is {cls.SUPPORTED_FORMATS[extension]['max_size']}MB"
+            }
+        
+        if file_info['size'] < 1024:  # 1KB minimum
+            return {
+                'valid': False,
+                'message': "File too small to be valid audio"
+            }
+        
+        return {
+            'valid': True,
+            'message': "File validation successful"
+        }
+
 def check_system_compatibility() -> tuple[bool, List[str]]:
     """Check system compatibility for transcription"""
-    import torch
-    import shutil
-    
     issues = []
     compatible = True
     
@@ -314,9 +377,9 @@ def check_system_compatibility() -> tuple[bool, List[str]]:
 class ErrorConfig:
     """Configuration for error handling and retries"""
     RETRY_DELAYS = {
-        'download': [5, 10, 20, 30, 60],  # Progressive delays for downloads
-        'transcribe': [10, 20, 30, 60, 120],  # Longer delays for transcription
-        'rate_limit': [60, 120, 240, 480, 960]  # Very long delays for rate limits
+        'download': [5, 10, 20, 30, 60],
+        'transcribe': [10, 20, 30, 60, 120],
+        'rate_limit': [60, 120, 240, 480, 960]
     }
     
     MAX_RETRIES = {
@@ -335,8 +398,8 @@ class ErrorConfig:
 
 class ProcessingConfig:
     """Configuration for processing parameters"""
-    BATCH_SIZE = 3  # Number of simultaneous downloads
-    MEMORY_THRESHOLD = 0.8  # GPU memory threshold for cleanup
-    PROGRESS_SAVE_INTERVAL = 60  # Save progress every 60 seconds
-    CLEANUP_THRESHOLD = 10  # Clean up after every 10 videos
-    MAX_TRANSCRIPT_SIZE = 10 * 1024 * 1024  # 10MB max transcript size
+    BATCH_SIZE = 3
+    MEMORY_THRESHOLD = 0.8
+    PROGRESS_SAVE_INTERVAL = 60
+    CLEANUP_THRESHOLD = 10
+    MAX_TRANSCRIPT_SIZE = 10 * 1024 * 1024  # 10MB

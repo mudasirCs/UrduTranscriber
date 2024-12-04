@@ -18,7 +18,7 @@ from urllib.error import HTTPError
 import threading
 from queue import Queue
 import time
-from .utils import ModelConfig, VideoUtility, extract_playlist_info, format_duration, sanitize_filename, get_timestamp
+from .utils import AudioUtility, ModelConfig, VideoUtility, extract_playlist_info, format_duration, sanitize_filename, get_timestamp
 
 class TranscriptionManager:
     def __init__(self):
@@ -681,3 +681,78 @@ class TranscriptionManager:
             overhead += duration * 0.05
         
         return int(processing_time + overhead)
+
+    def transcribe_audio_file(self, audio_path, filename, model_name="base", progress_callback=None):
+        """Process uploaded audio file"""
+        try:
+            if progress_callback:
+                progress_callback(0.1, "Loading model...")
+            model = self.load_model(model_name)
+            
+            if progress_callback:
+                progress_callback(0.3, "Preparing audio...")
+                
+            # Convert to MP3 if needed
+            if not audio_path.endswith('.mp3'):
+                temp_mp3 = os.path.join(self.dirs['temp'], 'temp.mp3')
+                if not AudioUtility.convert_to_mp3(audio_path, temp_mp3):
+                    raise Exception("Failed to convert audio format")
+                audio_path = temp_mp3
+            
+            if progress_callback:
+                progress_callback(0.4, "Transcribing...")
+                
+            # Get duration for document
+            duration = AudioUtility.get_audio_duration(audio_path)
+            
+            # Transcribe
+            result = model.transcribe(
+                audio_path,
+                language="ur",
+                task="transcribe",
+                fp16=False
+            )
+            
+            if progress_callback:
+                progress_callback(0.8, "Generating document...")
+            
+            # Create info dict for document
+            info = {
+                'title': os.path.splitext(filename)[0],
+                'duration': duration or 0,
+                'channel': 'Local Audio',
+                'upload_date': datetime.now().strftime('%Y-%m-%d')
+            }
+            
+            # Generate document
+            doc_path = self.save_transcript(result, info, "Local Audio File")
+            
+            if progress_callback:
+                progress_callback(1.0, "Complete!")
+                
+            return doc_path
+            
+        except Exception as e:
+            raise Exception(f"Error processing audio: {str(e)}")
+            
+        finally:
+            # Cleanup temporary files
+            if 'temp_mp3' in locals() and os.path.exists(temp_mp3):
+                try:
+                    os.remove(temp_mp3)
+                except:
+                    pass
+
+    def get_transcript_stats(self):
+        """Get statistics about transcriptions"""
+        try:
+            transcripts = list(Path(self.dirs['output']).glob('*.docx'))
+            total_size = sum(f.stat().st_size for f in transcripts)
+            
+            return {
+                'total_transcripts': len(transcripts),
+                'total_size': total_size,
+                'latest_transcript': max(transcripts, key=lambda x: x.stat().st_mtime).name if transcripts else None
+            }
+        except Exception:
+            return None

@@ -1,18 +1,10 @@
-# Project specific
-temp/
-transcripts/
-logs/
-*.mp3
-*.wav
-*.webm
-*.docx
-
 # Python
 __pycache__/
 *.py[cod]
 *$py.class
 *.so
 .Python
+env/
 build/
 develop-eggs/
 dist/
@@ -25,45 +17,31 @@ parts/
 sdist/
 var/
 wheels/
-share/python-wheels/
 *.egg-info/
 .installed.cfg
 *.egg
 
 # Virtual Environment
 venv/
-env/
 ENV/
-.env
-.venv
+transcripts/
+
+generate_project_xml.py
+project_knowledge.xml
 
 # IDE
-.vscode/
 .idea/
-*.swp
-*.swo
-.project
-.pydevproject
-.settings/
+.vscode/
 
-# OS specific
-.DS_Store
-Thumbs.db
-*.db
-desktop.ini
+# Project specific
+backend/data/temp/*
+backend/data/cache/*
+backend/data/logs/*
+backend/data/transcripts/*
+!backend/data/temp/.gitkeep
+!backend/data/cache/.gitkeep
+!backend/data/logs/.gitkeep
+!backend/data/transcripts/.gitkeep
 
-# Streamlit
-.streamlit/
-
-# Logs
-*.log
-*.log.*
-
-# Model files (if you want users to download their own)
-# Uncomment if you don't want to include model files
-# *.pt
-# *.pth
-# *.bin
-
-# Documentation
-docs/_build/
+# Environment variables
+.env

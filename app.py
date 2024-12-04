@@ -12,7 +12,8 @@ from src.utils import (
     extract_playlist_info, 
     format_duration,
     check_system_compatibility,
-    VideoUtility
+    VideoUtility,
+    AudioUtility
 )
 from pathlib import Path
 import os
@@ -21,11 +22,11 @@ from datetime import datetime
 
 # Must be first Streamlit command
 st.set_page_config(
-    page_title="YouTube Urdu Video Transcriber",
+    page_title="YouTube & Audio Transcriber",
     page_icon="📝",
     layout="wide",
     menu_items={
-        'About': "YouTube Urdu Video Transcriber - Transcribe videos and playlists to text"
+        'About': "YouTube & Audio Transcriber - Convert videos and audio to text"
     }
 )
 
@@ -40,7 +41,6 @@ def init_session_state():
         st.session_state.preview = VideoPreview()
         st.session_state.initialization_checked = False
         
-        # Set Large as default model consistently
         st.session_state.model_option = "Large"
         st.session_state.model_info = ModelConfig.MODELS["Large"].copy()
         st.session_state.model_key = "large"
@@ -79,7 +79,6 @@ def render_sidebar():
             key="model_select"
         )
 
-        # Update session state if model changed
         if selected_model != st.session_state.model_option:
             st.session_state.model_option = selected_model
             st.session_state.model_info = ModelConfig.MODELS[selected_model].copy()
@@ -98,7 +97,7 @@ def render_sidebar():
         
         st.markdown(f"**Description:** {st.session_state.model_info['description']}")
 
-        # Additional system information
+        # System information
         st.markdown("### System Information")
         if torch.cuda.is_available():
             gpu_info = torch.cuda.get_device_properties(0)
@@ -112,47 +111,155 @@ def render_sidebar():
         if stats:
             st.markdown("### Usage Statistics")
             st.metric("Total Transcripts", stats['total_transcripts'])
-            st.metric("Total Playlists", stats['total_playlists'])
             st.metric("Storage Used", format_size(stats['total_size']))
 
-            
 def main():
-    # Initialize session state
+    # Initialize and check
     init_session_state()
-    
-    # Check system compatibility
     check_initialization()
-    
-    # Render sidebar
     render_sidebar()
     
     # Main content
-    st.markdown('<h1 class="main-title">YouTube Urdu Video Transcriber</h1>', unsafe_allow_html=True)
+    st.markdown('<h1 class="main-title">Audio & Video Transcriber</h1>', unsafe_allow_html=True)
     
-    # URL input
-    url = st.text_input(
-        "Enter YouTube URL (video or playlist)",
-        help="Paste a YouTube video or playlist URL here"
+    # Input method selection
+    input_method = st.radio(
+        "Select Input Method",
+        ["YouTube URL", "Audio File", "YouTube Playlist"],
+        horizontal=True,
+        help="Choose your input source"
     )
     
-    if url:
-        try:
-            # Validate URL
-            if not VideoUtility.validate_url(url):
-                st.error("Invalid YouTube URL. Please enter a valid video or playlist URL.")
-                st.stop()
-            
-            if is_playlist_url(url):
-                handle_playlist(url)
-            else:
-                handle_single_video(url)
+    if input_method == "YouTube URL":
+        url = st.text_input(
+            "Enter YouTube URL",
+            help="Paste a YouTube video URL here"
+        )
         
-        except Exception as e:
-            st.error(f"Error: {str(e)}")
+        if url:
+            try:
+                if not VideoUtility.validate_url(url):
+                    st.error("Invalid YouTube URL. Please enter a valid video URL.")
+                    st.stop()
+                handle_single_video(url)
+            except Exception as e:
+                st.error(f"Error: {str(e)}")
+                
+    elif input_method == "Audio File":
+        handle_audio_upload()
+        
+    else:  # YouTube Playlist
+        url = st.text_input(
+            "Enter YouTube Playlist URL",
+            help="Paste a YouTube playlist URL here"
+        )
+        
+        if url:
+            try:
+                if not is_playlist_url(url):
+                    st.error("Invalid playlist URL. Please enter a valid YouTube playlist URL.")
+                    st.stop()
+                handle_playlist(url)
+            except Exception as e:
+                st.error(f"Error: {str(e)}")
     
-    # Recent transcriptions
+    # Show recent transcriptions
     show_recent_transcriptions()
 
+def handle_audio_upload():
+    """Handle audio file upload and processing"""
+    uploaded_file = st.file_uploader(
+        "Upload Audio File",
+        type=['mp3', 'wav', 'm4a', 'ogg', 'flac', 'aac', 'wma'],
+        help="Supported formats: MP3, WAV, M4A, OGG, FLAC, AAC, WMA"
+    )
+    
+    if uploaded_file:
+        # Show file information
+        file_info = {
+            'name': uploaded_file.name,
+            'size': uploaded_file.size,
+            'type': uploaded_file.type,
+            'extension': os.path.splitext(uploaded_file.name)[1].lower()
+        }
+        
+        # File information display
+        st.markdown("### File Information")
+        cols = st.columns(3)
+        
+        with cols[0]:
+            st.metric("File Size", format_size(file_info['size']))
+        with cols[1]:
+            st.metric("Format", file_info['extension'][1:].upper())
+        with cols[2]:
+            validation_result = AudioUtility.validate_audio_file(file_info)
+            st.metric(
+                "Status", 
+                "✅ Valid" if validation_result['valid'] else "❌ Invalid",
+                help=validation_result.get('message', '')
+            )
+        
+        # Process if valid
+        if validation_result['valid']:
+            if st.button("Start Transcription", use_container_width=True):
+                process_audio_file(uploaded_file, file_info)
+
+def process_audio_file(uploaded_file, file_info):
+    """Process uploaded audio file"""
+    try:
+        with st.spinner("Processing..."):
+            progress_bar = st.progress(0)
+            status_text = st.empty()
+            
+            # Save uploaded file temporarily
+            with tempfile.NamedTemporaryFile(delete=False, suffix=file_info['extension']) as tmp_file:
+                tmp_file.write(uploaded_file.getvalue())
+                tmp_path = tmp_file.name
+            
+            try:
+                # Process the audio
+                doc_path = st.session_state.manager.transcribe_audio_file(
+                    tmp_path,
+                    file_info['name'],
+                    st.session_state.model_key,
+                    lambda p, s: (
+                        progress_bar.progress(p),
+                        status_text.text(s)
+                    )
+                )
+                
+                if doc_path:
+                    st.success("✅ Transcription completed!")
+                    
+                    # Download options
+                    col1, col2 = st.columns(2)
+                    with col1:
+                        with open(doc_path, 'rb') as f:
+                            st.download_button(
+                                "📄 Download Transcript",
+                                f,
+                                file_name=os.path.basename(doc_path),
+                                mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                                use_container_width=True
+                            )
+                    
+                    with col2:
+                        if st.button("📋 Copy to Clipboard", use_container_width=True):
+                            from docx import Document
+                            doc = Document(doc_path)
+                            text = "\n".join([paragraph.text for paragraph in doc.paragraphs])
+                            st.code(text, language=None)
+                            st.success("Text copied to clipboard!")
+                            
+            finally:
+                # Cleanup
+                try:
+                    os.unlink(tmp_path)
+                except:
+                    pass
+                    
+    except Exception as e:
+        st.error(f"Error processing audio file: {str(e)}")
     
 
 def handle_playlist(url):
