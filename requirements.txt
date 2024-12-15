@@ -3,6 +3,5 @@ openai_whisper==20240930
 pandas==2.2.3
 python_docx==1.1.2
 streamlit==1.40.2
-streamlit==1.40.1
 torch==2.5.1
 yt_dlp==2024.11.18

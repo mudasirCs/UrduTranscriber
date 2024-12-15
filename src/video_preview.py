@@ -18,41 +18,80 @@ class VideoPreview:
         try:
             cleaned_url = VideoUtility.get_clean_video_url(url)
             
-            ydl_opts = {
+            # First attempt - just get basic info without format
+            basic_opts = {
                 'quiet': True,
                 'no_warnings': True,
-                'extract_flat': False,
-                'format': 'best',
+                'extract_flat': True,
+                'format': None,  # No format specification
                 'ignoreerrors': True,
                 'no_color': True,
-                'cookies-from-browser': None,
-                'extractor_args': {'youtube': {'skip': ['dash', 'hls']}}
+                'cookies-from-browser': None
             }
             
-            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                try:
+            try:
+                with yt_dlp.YoutubeDL(basic_opts) as ydl:
                     info = ydl.extract_info(cleaned_url, download=False)
-                except Exception:
-                    ydl_opts['extract_flat'] = True
-                    ydl_opts['format'] = None
-                    with yt_dlp.YoutubeDL(ydl_opts) as ydl2:
-                        info = ydl2.extract_info(cleaned_url, download=False)
-                
-                if not info:
-                    raise Exception("Could not extract video information")
-                
-                return {
-                    'title': info.get('title', 'Unknown'),
-                    'duration': info.get('duration') or 0,
-                    'channel': info.get('channel', info.get('uploader', 'Unknown')),
-                    'view_count': info.get('view_count', 0),
-                    'upload_date': info.get('upload_date', 'Unknown'),
-                    'filesize': info.get('filesize_approx', info.get('filesize', 0)),
-                    'thumbnail': info.get('thumbnail', info.get('thumbnails', [{'url': None}])[0].get('url')),
-                    'is_short': VideoUtility.is_shorts_url(url),
-                    'video_id': info.get('id', VideoUtility.get_video_id(url)),
-                    'original_url': url
-                }
+                    if not info:
+                        # Second attempt with different options
+                        alt_opts = {
+                            'quiet': True,
+                            'no_warnings': True,
+                            'extract_flat': False,
+                            'format': None,
+                            'ignoreerrors': True,
+                            'no_color': True,
+                            'youtube_include_dash_manifest': False,
+                            'extractor_args': {'youtube': {'skip': ['dash', 'hls']}}
+                        }
+                        with yt_dlp.YoutubeDL(alt_opts) as ydl2:
+                            info = ydl2.extract_info(cleaned_url, download=False)
+                    
+                    if not info:
+                        raise Exception("Could not extract video information")
+                    
+                    # Process the info we got
+                    return {
+                        'title': info.get('title', 'Unknown'),
+                        'duration': info.get('duration') or 0,
+                        'channel': info.get('channel', info.get('uploader', 'Unknown')),
+                        'view_count': info.get('view_count', 0),
+                        'upload_date': info.get('upload_date', 'Unknown'),
+                        'filesize': info.get('filesize_approx', info.get('filesize', 0)),
+                        'thumbnail': info.get('thumbnail', info.get('thumbnails', [{'url': None}])[0].get('url')),
+                        'is_short': VideoUtility.is_shorts_url(url),
+                        'video_id': info.get('id', VideoUtility.get_video_id(url)),
+                        'original_url': url
+                    }
+            
+            except Exception as e:
+                if "Requested format is not available" in str(e):
+                    # Final attempt with absolute minimal options
+                    minimal_opts = {
+                        'quiet': True,
+                        'no_warnings': True,
+                        'extract_flat': True,
+                        'format': None,
+                        'skip_download': True,
+                        'ignoreerrors': True,
+                        'no_color': True
+                    }
+                    with yt_dlp.YoutubeDL(minimal_opts) as ydl3:
+                        info = ydl3.extract_info(cleaned_url, download=False)
+                        if info:
+                            return {
+                                'title': info.get('title', 'Unknown'),
+                                'duration': info.get('duration') or 0,
+                                'channel': info.get('channel', info.get('uploader', 'Unknown')),
+                                'view_count': info.get('view_count', 0),
+                                'upload_date': info.get('upload_date', 'Unknown'),
+                                'filesize': 0,  # Skip filesize for minimal info
+                                'thumbnail': info.get('thumbnail'),
+                                'is_short': VideoUtility.is_shorts_url(url),
+                                'video_id': info.get('id', VideoUtility.get_video_id(url)),
+                                'original_url': url
+                            }
+                raise  # Re-raise if not a format issue
                 
         except Exception as e:
             error_msg = str(e)
@@ -64,9 +103,12 @@ class VideoPreview:
                 raise Exception("This is a private video")
             elif "This live event has ended" in error_msg:
                 raise Exception("This live stream has ended")
+            elif "Requested format is not available" in error_msg:
+                raise Exception("Could not access this video format. The video might be region-restricted or require special access.")
             else:
                 raise Exception(f"Error fetching video info: {error_msg}")
-
+            
+            
     def estimate_processing_time(self, duration, model_key):
         base_time = duration * self.processing_speed.get(model_key, 1)
         overhead = 30

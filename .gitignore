@@ -22,8 +22,8 @@ wheels/
 *.egg
 
 # Virtual Environment
-venv/
-ENV/
+venv
+ENV
 transcripts/
 
 generate_project_xml.py

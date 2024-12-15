@@ -166,7 +166,7 @@ class TranscriptionManager:
                 
                 # Configure yt-dlp options for download
                 ydl_opts = {
-                    'format': 'bestaudio/best',
+                    'format': 'bestaudio[ext=m4a]/bestaudio/best',
                     'outtmpl': output_template,
                     'quiet': True,
                     'no_warnings': True,
