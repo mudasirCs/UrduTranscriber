@@ -346,6 +346,8 @@ def check_system_compatibility() -> tuple[bool, List[str]]:
     issues = []
     compatible = True
     
+
+    
     # Check Python version
     import sys
     if sys.version_info < (3, 8):
@@ -356,10 +358,18 @@ def check_system_compatibility() -> tuple[bool, List[str]]:
     if not torch.cuda.is_available():
         issues.append("No GPU detected - processing will be slower")
     else:
-        gpu_mem = torch.cuda.get_device_properties(0).total_memory / (1024**3)
+        gpu_info = torch.cuda.get_device_properties(0)
+        gpu_mem = gpu_info.total_memory / (1024**3)
+        gpu_name = gpu_info.name
+        issues.append(f"GPU detected: {gpu_name} with {gpu_mem:.1f}GB VRAM")
         if gpu_mem < 4:
             issues.append(f"Low GPU memory ({gpu_mem:.1f}GB) - larger models may not work")
     
+   # Check CUDA version
+    if torch.cuda.is_available():
+        cuda_version = torch.version.cuda
+        issues.append(f"CUDA Version: {cuda_version}")
+
     # Check FFmpeg
     if not shutil.which('ffmpeg'):
         compatible = False

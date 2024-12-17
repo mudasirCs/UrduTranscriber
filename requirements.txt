@@ -4,4 +4,7 @@ pandas==2.2.3
 python_docx==1.1.2
 streamlit==1.40.2
 torch==2.5.1
+# uncomment this version if you have GPU
+# torch==2.5.1+121cpu
+# torchvision==0.16.1+cu121
 yt_dlp==2024.11.18

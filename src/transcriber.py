@@ -164,7 +164,8 @@ class TranscriptionManager:
                             raise Exception("This video requires age verification or sign-in")
                         raise
                 
-                # Configure yt-dlp options for download
+                # Configure yt-dlp options for download                
+                
                 ydl_opts = {
                     'format': 'bestaudio[ext=m4a]/bestaudio/best',
                     'outtmpl': output_template,
@@ -298,6 +299,12 @@ class TranscriptionManager:
             if progress_callback:
                 progress_callback(0.1, "Loading model...")
 
+            # Add these CUDA optimization settings
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+                torch.backends.cuda.matmul.allow_tf32 = True
+                torch.backends.cudnn.allow_tf32 = True            
+
             model = TranscriptionManager.load_model(model_name)
             
             if progress_callback:
@@ -310,6 +317,7 @@ class TranscriptionManager:
             # Clear GPU memory before processing
             if torch.cuda.is_available():
                 torch.cuda.empty_cache()
+                model = model.cuda()
             
             model_info = None
             for display_name, config in ModelConfig.MODELS.items():
